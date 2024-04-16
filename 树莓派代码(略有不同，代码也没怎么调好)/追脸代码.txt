@@ -1,0 +1,289 @@
+#bgr8转jpeg格式
+import enum
+import cv2
+
+def bgr8_to_jpeg(value, quality=75):
+    return bytes(cv2.imencode('.jpg', value)[1])
+## 导入相关包，创建相机实例
+import cv2
+import ipywidgets.widgets as widgets
+import threading
+import time
+import sys
+
+image_widget = widgets.Image(format='jpeg', width=320, height=240)
+display(image_widget)
+# 添加PID滑竿调节PID值
+import ipywidgets as widgets
+    
+XServo_P = widgets.FloatSlider(
+value=0.2,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='XServo-P:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+
+XServo_I = widgets.FloatSlider(
+value=0,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='XServo-I:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+
+XServo_D = widgets.FloatSlider(
+value=0,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='XServer-D:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+
+YServo_P = widgets.FloatSlider(
+value=0.8,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='YServo-P:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+
+YServo_I = widgets.FloatSlider(
+value=0,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='YServo-I:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+
+YServo_D = widgets.FloatSlider(
+value=0,
+min=-10.0,
+max=10.0,
+step=0.1,
+description='YServer-D:',
+disabled=False,
+continuous_update=False,
+orientation='horizontal',
+readout=True,
+readout_format='.1f',
+)
+display(XServo_P, XServo_I, XServo_D, YServo_P, YServo_I, YServo_D)
+## 创建相关控制变量
+global face_x, face_y, face_w, face_h
+face_x = face_y = face_w = face_h = 0
+global servo_angle
+servo_angle = 1500
+global target_valuex
+target_valuex = 2048
+global target_valuey
+target_valuey = 2048
+## 创建PID控制实例
+import PID
+
+#xservo_pid = PID.PositionalPID(1.1, 0.2, 0.8)
+#yservo_pid = PID.PositionalPID(0.8, 0.2, 0.8)
+#Px,Ix,Dx,Py,Iy,Dy = 1.1, 0.2, 0.8 , 0.8, 0.2, 0.8
+
+xservo_pid = PID.PositionalPID(XServo_P.value, XServo_I.value, XServo_D.value)
+yservo_pid = PID.PositionalPID(YServo_P.value, YServo_I.value, YServo_D.value)
+## 设置GPIO口为BCM编码方式
+import RPi.GPIO as GPIO
+import time
+#设置GPIO口为BCM编码方式
+GPIO.setmode(GPIO.BCM)
+
+# #舵机引脚定义
+#ServoPin = 11  #S2
+ServoPinB = 9  #S3  y轴舵机
+Rmotor_front = 19
+Rmotor_back  = 26
+Rmotor_pwm   = 13
+
+Lmotor_front = 20
+Lmotor_back  = 21
+Lmotor_pwm   = 16
+
+#舵机引脚设置为输出模式
+def GPIO_init():
+    GPIO.setup(Rmotor_front, GPIO.OUT)
+    GPIO.setup(Rmotor_back, GPIO.OUT)
+    GPIO.setup(Rmotor_pwm, GPIO.OUT)
+    
+    GPIO.setup(Lmotor_front, GPIO.OUT)
+    GPIO.setup(Lmotor_back, GPIO.OUT)
+    GPIO.setup(Lmotor_pwm, GPIO.OUT)
+    
+    GPIO.setup(ServoPinB, GPIO.OUT)
+
+#定义变量 微分 积分 误差 上次误差
+#Xerro_division,Xerro_integrate,Yerro_division,Yerro_integrate,Xerro,Yerro,Last_Xerro,Last_Yerro=0
+Xerro_division=Xerro_integrate=Yerro_division=Yerro_integrate=Xerro=Yerro=Last_Xerro=Last_Yerro=0
+def Pid_Control_Vlaue(x,y,px,ix,dx,py,iy,dy):
+    global Xerro_division,Xerro_integrate,Yerro_division,Yerro_integrate,Xerro,Yerro,Last_Xerro,Last_Yerro
+    #误差值获取
+    Xerro,Yerro = (x-160),(y-120)
+    #误差微分获取
+    Xerro_division,Yerro_division = (Xerro-Last_Xerro),(Yerro-Last_Yerro)
+    #误差积分获取
+    Xerro_integrate,Yerro_integrate = (Xerro_integrate+Xerro),(Yerro_integrate+Yerro)
+    #记录误差
+    Last_Xerro,Last_Yerro = Xerro,Yerro
+    #控制值
+    X_ControlValue = px*Xerro+ix*Xerro_integrate+dx*Xerro_division
+    Y_ControlValue = py*Yerro+iy*Yerro_integrate+dy*Yerro_division
+    return X_ControlValue,Y_ControlValue
+
+def motor_control(X_ControlValue):
+    if X_ControlValue<0:  #人脸在左
+        X_ControlValue = -X_ControlValue
+        if X_ControlValue>100:
+            X_ControlValue = 100
+        GPIO.output(Rmotor_front,GPIO.HIGH)
+        GPIO.output(Rmotor_back,GPIO.LOW)
+        
+        GPIO.output(Lmotor_front,GPIO.LOW)
+        GPIO.output(Lmotor_back,GPIO.HIGH)
+        
+        GPIO.output(Rmotor_pwm,GPIO.HIGH)
+        GPIO.output(Lmotor_pwm,GPIO.HIGH)
+        time.sleep(0.1*(100*X_ControlValue/10000))
+        GPIO.output(Rmotor_pwm,GPIO.LOW)
+        GPIO.output(Lmotor_pwm,GPIO.LOW)
+        time.sleep(0.1*(1-100*X_ControlValue/10000))
+        
+    elif X_ControlValue>0: #人脸在右
+        if X_ControlValue>100:
+            X_ControlValue = 100
+        GPIO.output(Rmotor_front,GPIO.LOW)
+        GPIO.output(Rmotor_back,GPIO.HIGH)
+        
+        GPIO.output(Lmotor_front,GPIO.HIGH)
+        GPIO.output(Lmotor_back,GPIO.LOW)
+        
+        GPIO.output(Rmotor_pwm,GPIO.HIGH)
+        GPIO.output(Lmotor_pwm,GPIO.HIGH)
+        time.sleep(0.1*(100*X_ControlValue/10000))
+        GPIO.output(Rmotor_pwm,GPIO.LOW)
+        GPIO.output(Lmotor_pwm,GPIO.LOW)
+        time.sleep(0.1*(1-100*X_ControlValue/10000))
+    
+#定义一个脉冲函数，用来模拟方式产生pwm值
+#时基脉冲为20ms，该脉冲高电平部分在0.5-2.5ms控制0-180度
+def servo_pulse(myangleB):
+    pulsewidthB = myangleB
+    GPIO.output(ServoPinB, GPIO.HIGH)
+    time.sleep(pulsewidthB/1000000.0)
+    GPIO.output(ServoPinB, GPIO.LOW)
+    time.sleep(20.0/1000-pulsewidthB/1000000.0)
+    
+    #根据舵机脉冲控制范围为500-2500usec内：
+def Servo_control( angle_2):
+    #init()    
+    if angle_2 < 500:
+        angle_2 = 500
+    elif angle_2 > 2500:
+        angle_2 = 2500
+    servo_pulse(angle_2)
+
+def Servo_angle(Y_ControlValue):
+    global servo_angle
+    Y_ControlValue = -Y_ControlValue
+    if Y_ControlValue >80:
+        Y_ControlValue = 80
+    elif Y_ControlValue <-80:
+        Y_ControlValue = -80
+    servo_angle = servo_angle +Y_ControlValue
+    Servo_control(servo_angle)
+    
+finished_flag = False  
+def face_follow(face_x,face_w,face_y,face_h):
+    #Proportion-Integration-Differentiation算法
+    # 输入X轴方向参数PID控制输入
+    x= (face_x + face_w/2)      
+    # 输入Y轴方向参数PID控制输入
+    y= (face_y + face_h/2)
+    # 将云台转动至PID调校位置
+    x_control,y_control=Pid_Control_Vlaue(x,y,XServo_P.value,XServo_I.value,XServo_D.value,YServo_P.value,YServo_I.value,YServo_D.value)
+    #x_control,y_control=Pid_Control_Vlaue(x,y,Px,Ix,Dx,Py,Iy,Dy)
+    motor_control(x_control)
+    Servo_angle(y_control)
+    #Servo_control(target_valuex,target_valuey)
+    #Servo_control(x,y)
+    #print("x = ",x_control,"\n","y = ",y_control)
+    global finished_flag
+    finished_flag = True
+
+    
+    
+    ## 载入"Haar"" 级联分类器
+    import cv2
+    a=0
+    face_haar = cv2.CascadeClassifier('haarcascade_profileface.xml')
+    #  开启摄像头
+    image = cv2.VideoCapture(0)
+    image.set(3,320)
+    image.set(4,240)
+    ## 云台运动主进程
+    GPIO.setwarnings(False)
+    GPIO_init()#初始化gpio
+    servo_pulse(1500)
+    servo_pulse(1500)
+    servo_pulse(1500)
+    servo_pulse(1500)
+    while 1:
+        ret,frame = image.read()
+        try:
+            image_widget.value = bgr8_to_jpeg(frame)
+        except:
+            continue
+        # 把图像转为黑白图像
+        gray_img = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_haar.detectMultiScale(gray_img, 1.1, 3)
+        
+        #xservo_pid = PID.PositionalPID(XServo_P.value, XServo_I.value, XServo_D.value)
+        #yservo_pid = PID.PositionalPID(YServo_P.value, YServo_I.value, YServo_D.value)
+        
+        if len(faces) > 0:
+            (face_x, face_y, face_w, face_h) = faces[0]
+            # cv2.rectangle(frame,(face_x+10,face_y),(face_x+face_w-10,face_y+face_h+20),(0,255,0),2)
+            cv2.rectangle(frame,(face_x,face_y),(face_x+face_w,face_y+face_h),(0,255,0),2)
+            try:
+                image_widget.value = bgr8_to_jpeg(frame)
+            except:
+                continue
+            if not finished_flag:
+                thread = threading.Thread(target=face_follow,args=(face_x,face_w,face_y,face_h))
+                thread.start()
+                finished_flag=False
+            else:
+                thread.join()
+                thread = threading.Thread(target=face_follow,args=(face_x,face_w,face_y,face_h))
+                thread.start()
+                finished_flag=False
+                
