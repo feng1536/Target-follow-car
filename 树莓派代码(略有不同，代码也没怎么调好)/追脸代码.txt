@@ -1,3 +1,5 @@
+#注：本代码是写在jupyter上的代码
+
 #bgr8转jpeg格式
 import enum
 import cv2
