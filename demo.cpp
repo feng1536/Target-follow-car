@@ -22,10 +22,12 @@
 #define turn_compensate 9
 #define left_motor_addon 4
 #define right_motor_addon 0
+#define Line_Tracking_Speed 15
 
 /*pid*/
 float PID_Motor_Turn[3] = {0.0075, 0.0, 0.01}; // p i d
 float PID_Motor_Run[3] = {0.61, 0, 2};        // p i d
+float PID_Line_tracking[3]={0.05,0.000001,0.03};
 
 void GPIO_Init(void);
 void motor_write(int motor_speed_R, int motor_speed_L);
@@ -170,8 +172,9 @@ mode_select: // 选择模式的位标
     {
         while (1)
         {
-            static int  center[3],width[3],last_center=160;
-            int left[3]={0},right[3]={0},line_depart=0,err=0;
+            static int  center,width,last_center_err=0,center_err;
+            static int cycle_select =0,center_integrate=0,center_division=0;
+            int left,right,line_depart=0,err=0,control_val;
             cv::Mat cvImg, grayImg; // 创建一个Mat对象来存储摄像头的图像
 
             cap >> cvImg; // 从摄像头获取图像
@@ -185,7 +188,7 @@ mode_select: // 选择模式的位标
             // 使用Otsu算法
             // threshold(grayImg, imgB, 125, 255, THRESH_BINARY | THRESH_OTSU);
 
-            uchar* ptr = imgB.ptr<uchar>(cap_half_height/2);
+            uchar* ptr = imgB.ptr<uchar>(cap_half_height+cap_half_height/2);
             uchar line_data[2*cap_half_width];
 
             /*循线原始数据*/
@@ -193,25 +196,18 @@ mode_select: // 选择模式的位标
             {
                 line_data[i] = ptr[i];
             }
-
             /*右跳变*/
             for(i=1;i<2*cap_half_width-1;i++)
             {
                 if(line_data[i-1]>0.5&&line_data[i]<0.5&&line_data[i+1]<0.5)
                 {
-                    left[line_depart] = i;
-                    line_depart++;
-                }
-                else if(line_data[0]<0.5&&line_data[1]<0.5&&line_data[1]<0.5)
-                {
-                    left[line_depart] = 0;
-                    line_depart++;
-                }
-                if(line_depart ==3)
-                {
-                    err =1;
+                    left = i;
                     break;
                 }
+              else if(line_data[0]<0.5&&line_data[1]<0.5&&line_data[1]<0.5)
+                {
+                    left= 0;
+                } 
 
             }
             /*右跳变*/
@@ -220,44 +216,79 @@ mode_select: // 选择模式的位标
             {
                 if(line_data[i+1]>0.5&&line_data[i]<0.5&&line_data[i-1]<0.5)
                 {
-                    right[line_depart] = i;
-                    line_depart--;
+                    right = i;
+                    break;
                 }
                 else if(line_data[2*cap_half_width]<0.5&&line_data[2*cap_half_width-1]<0.5&&line_data[2*cap_half_width-2]<0.5)
                 {
-                    right[line_depart] = 2*cap_half_width;
-                    line_depart--;
-                }
+                    right = 2*cap_half_width;
+                } 
 
-                if(line_depart ==-1)
+            }
+
+
+                width = right-left;
+                center = (right+left)/2;
+                
+
+            if(width>400)
+            {   
+                 cycle_select = 1;
+            }
+
+            if(cycle_select ==0)
+            {
+                if(width>200)
                 {
-                    err =1;
-                    break;
+                    center_err = cap_half_width-left-cap_half_width/2;
+                    center_integrate = center_integrate+center_err;
+                    center_division = center_err - last_center_err;
+                    last_center_err=center_err;
                 }
-
+                else
+                {
+                    center_err = cap_half_width-center;
+                    center_integrate = center_integrate+center_err;
+                    center_division = center_err - last_center_err;
+                    last_center_err=center_err;
+                }
+                 control_val =   PID_Line_tracking[0]*center_err+\
+                                PID_Line_tracking[1]*center_integrate+\
+                                PID_Line_tracking[2]*center_division;
+                motor_write(Line_Tracking_Speed+control_val,Line_Tracking_Speed-control_val);                    
             }
 
-            if(err ==1)
+            if(cycle_select ==1)
             {
-                printf("岔路数超过检测范围\r\n");
-                err =0;
-                continue;
+                if(width>200)
+                {
+                    center_err = cap_half_width-right-cap_half_width/2;
+                    center_integrate = center_integrate+center_err;
+                    center_division = center_err - last_center_err;
+                    last_center_err=center_err;
+                }
+                else
+                {
+                    center_err = cap_half_width-center;
+                    center_integrate = center_integrate+center_err;
+                    center_division = center_err - last_center_err;
+                    last_center_err=center_err; 
+                }
+                control_val =   PID_Line_tracking[0]*center_err+\
+                                PID_Line_tracking[1]*center_integrate+\
+                                PID_Line_tracking[2]*center_division;
+                motor_write(Line_Tracking_Speed+control_val,Line_Tracking_Speed-control_val);                    
             }
 
-            /*多段线宽和中点位置*/
-            for(line_depart=0;line_depart<3;line_depart++)
-            {
-                width[line_depart] = right[line_depart]-left[line_depart];
-                center[line_depart] = (right[line_depart]+left[line_depart])/2;
-                printf("%d  %d %d  %d %d  %d\n",center[0],width[0],center[1],width[1],center[2],width[2]);
-            }
-
-
+            printf("%d  %d  %d %d\n",center,width,control_val,cycle_select);
 
             cv::imshow("imgB", imgB);
             // 按下ESC键退出
             if (cv::waitKey(5) >= 0)
+            {
+                motor_stop();
                 goto mode_select;
+            }
         }
     }
 
@@ -335,7 +366,10 @@ mode_select: // 选择模式的位标
 
             // 按下ESC键退出
             if (cv::waitKey(5) >= 0)
+            {
+                motor_stop();
                 break;
+            }
         }
 
         motor_stop();
